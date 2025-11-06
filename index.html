@@ -366,9 +366,20 @@
 
   // View mode toggle
   function enterView(){
-    viewer.classList.add('show'); viewer.setAttribute('aria-hidden','false');
-    state.viewing = true; state.viewScrollTop = document.getElementById('content').scrollTop || 0; saveStateThrottled();
-    renderViewer(editor.value);
+    setTimeout(() => {
+      viewer.classList.add('show');
+      viewer.setAttribute('aria-hidden','false');
+      state.viewing = true;
+      state.viewScrollTop = document.getElementById('content').scrollTop || 0;
+      renderViewer(editor.value);
+      saveStateThrottled();
+      // iOS Safari 対策：音声API初期化の遅延を避けるため短い無音を再生
+      try {
+        const silent = new SpeechSynthesisUtterance(' ');
+        silent.volume = 0;
+        window.speechSynthesis.speak(silent);
+      } catch(e) {}
+    }, 100);
   }
   function leaveView(){
     viewer.classList.remove('show'); viewer.setAttribute('aria-hidden','true');
@@ -377,6 +388,13 @@
   }
   closeView.addEventListener('click', leaveView);
   viewBtn.addEventListener('click', ()=>{ state.index=0; enterView(); });
+
+  // タッチイベントでも反応するように追加（モバイルSafari対策）
+  viewBtn.addEventListener('touchend', (e)=>{
+    e.preventDefault();
+    state.index = 0;
+    enterView();
+  }, {passive: false});
 
   // Playback controls
   playBtn.addEventListener('click', ()=>{
