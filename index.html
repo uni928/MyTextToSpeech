@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>テキスト読み上げビューア</title>
+  <meta name="description" content="テキストボックスに書いた文章をリアルタイム保存し、閲覧モードで全画面表示＆読み上げ。IndexedDB に保存して再開できます。" />
+  <style>
+    :root{
+      --bg: radial-gradient(1200px 800px at 10% 10%, #e9f0ff 0, #f7fbff 25%, #f8f9fb 55%, #eef2f8 100%),
+            linear-gradient(120deg, #eff6ff, #fff 30%, #faf5ff 100%);
+      --card: rgba(255,255,255,.65);
+      --muted: #5d6b82;
+      --ink: #0f172a;
+      --accent: #5b8cff; /* primary */
+      --accent-2: #8b5cf6; /* secondary */
+      --ring: 0 0 0 8px rgba(91,140,255,.15);
+      --shadow-1: 0 10px 25px rgba(18, 38, 75, .08), 0 2px 8px rgba(18, 38, 75, .08);
+    }
+    html,body{height:100%;}
+    body{
+      margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Yu Gothic", sans-serif;
+      color: var(--ink); background: var(--bg) fixed; line-height:1.6;
+    }
+    .wrap{max-width:1100px;margin:clamp(12px,2.2vw,32px) auto;padding:clamp(12px,2.2vw,24px);}
+    .header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}
+    .brand{display:flex;align-items:center;gap:12px}
+    .logo{width:42px;height:42px;border-radius:14px;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:var(--shadow-1);position:relative}
+    .logo::after{content:"";position:absolute;inset:8px;border-radius:10px;background:rgba(255,255,255,.75);mix-blend:overlay;}
+    h1{font-size:clamp(18px,2.6vw,28px);margin:0;font-weight:800;letter-spacing:.02em}
+    .muted{color:var(--muted)}
+
+    .card{background:var(--card);backdrop-filter: saturate(1.8) blur(8px); border:1px solid rgba(120,144,180,.18);
+          border-radius:22px; box-shadow: var(--shadow-1);}
+
+    .editor{display:grid;grid-template-columns: 1fr;gap:16px;padding:18px}
+    @media (min-width: 900px){ .editor{grid-template-columns: 1.1fr .9fr;} }
+
+    textarea{
+      width:100%; min-height:56vh; resize:vertical; border-radius:16px; padding:18px 18px 56px 18px;
+      border:1px solid rgba(120,144,180,.25); background:rgba(255,255,255,.9);
+      outline:none; font: 16px/1.8 ui-monospace, SFMono-Regular, Menlo, Consolas, "Roboto Mono", "Noto Sans JP", monospace;
+      box-shadow: inset 0 2px 6px rgba(16,24,40,.04);
+    }
+    textarea:focus{box-shadow: var(--ring);}
+
+    .side{display:flex;flex-direction:column;gap:12px}
+    .side .panel{padding:14px;border-radius:16px;border:1px solid rgba(120,144,180,.2);background:rgba(255,255,255,.85)}
+    .side .panel h3{margin:.2rem 0 .6rem;font-size:14px;letter-spacing:.06em;color:#334155;text-transform:uppercase}
+
+    .btn{appearance:none;border:none;padding:12px 16px;border-radius:14px;font-weight:700;letter-spacing:.03em;cursor:pointer;
+      background:linear-gradient(180deg,#ffffff, #f0f5ff); border:1px solid rgba(120,144,180,.35);
+      box-shadow:0 2px 0 rgba(0,0,0,.03), 0 6px 18px rgba(24,94,224,.08); transition:.15s transform, .2s box-shadow;
+    }
+    .btn:hover{transform:translateY(-1px); box-shadow:0 6px 24px rgba(24,94,224,.14)}
+    .btn.primary{color:white; background:linear-gradient(135deg,var(--accent),var(--accent-2)); border-color:transparent}
+    .btn.ghost{background:transparent}
+
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .grow{flex:1}
+    label{font-size:12px;color:#475569}
+    input[type="range"], select{width:100%}
+
+    /* viewer */
+    .viewer{position:fixed; inset:0; display:none; place-items:stretch; background:linear-gradient(120deg, #0b1220, #0b1220 40%, #0e1330 100%)}
+    .viewer.show{display:grid}
+    .viewer .toolbar{display:flex;align-items:center;gap:10px; padding:10px 14px; background:rgba(15,23,42,.72);backdrop-filter: blur(8px);
+        border-bottom:1px solid rgba(148,163,184,.18)}
+    .viewer .toolbar .title{color:#e5edff; font-weight:700; letter-spacing:.04em}
+    .viewer .toolbar .sp{flex:1}
+    .viewer .toolbar .btn{background:rgba(255,255,255,.06);color:#e2e8f0;border-color:rgba(148,163,184,.2)}
+    .viewer .toolbar .btn.primary{background:linear-gradient(135deg,#5b8cff,#8b5cf6)}
+
+    .content{overflow:auto; padding: clamp(16px, 2.5vw, 28px);}
+    .doc{color:#e7ecff; max-width: 1100px; margin: 0 auto; line-height: 1.95; font-size: clamp(18px, 2.2vw, 22px);}
+    .doc p{margin: 0 0 1.1em}
+    .doc .active{background:linear-gradient(90deg, rgba(139,92,246,.25), rgba(91,140,255,.25)); border-radius: 8px; padding:2px 4px}
+
+    .floating{position:fixed; right:16px; bottom:16px; display:flex; gap:10px; flex-wrap:wrap}
+
+    .toast{position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:#111827; color:#e5e7eb; padding:10px 14px; border-radius:12px; box-shadow:var(--shadow-1); opacity:0; pointer-events:none; transition:.25s}
+    .toast.show{opacity:1}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>テキスト読み上げビューア</h1>
+          <div class="muted">リアルタイム保存 / 閲覧モード</div>
+        </div>
+      </div>
+      <div class="row">
+        <button id="viewBtn" class="btn primary">閲覧（全画面表示）</button>
+      </div>
+    </div>
+
+    <div class="card editor">
+      <div>
+        <label for="editor">テキストボックス</label>
+        <textarea id="editor" placeholder="ここに文章を入力してください。\n\nヒント：左の“音声設定”で声や速度を調整できます。再読み込み後も内容と設定は自動復元されます。"></textarea>
+      </div>
+      <aside class="side">
+        <div class="panel">
+          <h3>音声設定</h3>
+          <div class="row">
+            <label class="grow">音声 <select id="voiceSel"></select></label>
+          </div>
+          <div class="row">
+            <label class="grow">速度 <input id="rate" type="range" min="0" max="4" step="0.1" value="1"/></label>
+            <label class="grow">ピッチ <input id="pitch" type="range" min="0" max="2" step="0.1" value="1"/></label>
+          </div>
+          <div class="row">
+            <label class="grow">音量 <input id="volume" type="range" min="0" max="1" step="0.05" value="1"/></label>
+          </div>
+          <div class="row">
+            <button id="speakQuick" class="btn grow">選択範囲を試聴</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>動作</h3>
+          <div class="row">
+            <button id="saveNow" class="btn grow">手動保存</button>
+            <button id="clearAll" class="btn grow ghost">全消去</button>
+          </div>
+          <small class="muted">入力は自動で IndexedDB に保存されます。</small>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Viewer -->
+  <div id="viewer" class="viewer" aria-hidden="true">
+    <div class="toolbar">
+      <span class="title">閲覧モード</span>
+      <div class="sp"></div>
+      <select id="voiceSelV" title="音声"></select>
+      <label class="muted" style="font-size:12px">速度 <input id="rateV" type="range" min="0" max="4" step="0.1" value="1" style="width:120px"></label>
+      <label class="muted" style="font-size:12px">ピッチ <input id="pitchV" type="range" min="0" max="2" step="0.1" value="1" style="width:120px"></label>
+      <label class="muted" style="font-size:12px">音量 <input id="volumeV" type="range" min="0" max="1" step="0.05" value="1" style="width:120px"></label>
+      <button id="play" class="btn primary">▶ 再生</button>
+      <button id="pause" class="btn">⏸ 一時停止</button>
+      <button id="resume" class="btn">⏯ 再開</button>
+      <button id="stop" class="btn">■ 停止</button>
+      <button id="closeView" class="btn">✕ 閉じる</button>
+    </div>
+    <div id="content" class="content">
+      <article id="doc" class="doc" aria-live="polite" aria-atomic="false"></article>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+  // ===== IndexedDB minimalist wrapper =====
+  const DB_NAME = 'ttsNotesDB';
+  const STORE = 'state';
+  function openDB(){
+    return new Promise((resolve, reject)=>{
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = ()=>{
+        const db = req.result;
+        if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+      }
+      req.onsuccess = ()=> resolve(req.result);
+      req.onerror = ()=> reject(req.error);
+    });
+  }
+  async function idbGet(key){const db=await openDB(); return new Promise((res,rej)=>{const tx=db.transaction(STORE,'readonly');const st=tx.objectStore(STORE);const r=st.get(key);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+  async function idbSet(key, val){const db=await openDB(); return new Promise((res,rej)=>{const tx=db.transaction(STORE,'readwrite');tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);tx.objectStore(STORE).put(val, key)})}
+
+  // ===== UI Elements =====
+  const editor = document.getElementById('editor');
+  const viewBtn = document.getElementById('viewBtn');
+  const viewer = document.getElementById('viewer');
+  const docEl = document.getElementById('doc');
+  const voiceSel = document.getElementById('voiceSel');
+  const voiceSelV = document.getElementById('voiceSelV');
+  const rate = document.getElementById('rate');
+  const pitch = document.getElementById('pitch');
+  const volume = document.getElementById('volume');
+  const rateV = document.getElementById('rateV');
+  const pitchV = document.getElementById('pitchV');
+  const volumeV = document.getElementById('volumeV');
+  const toast = document.getElementById('toast');
+
+  const speakQuick = document.getElementById('speakQuick');
+  const saveNow = document.getElementById('saveNow');
+  const clearAll = document.getElementById('clearAll');
+
+  const playBtn = document.getElementById('play');
+  const pauseBtn = document.getElementById('pause');
+  const resumeBtn = document.getElementById('resume');
+  const stopBtn = document.getElementById('stop');
+  const closeView = document.getElementById('closeView');
+  // ===== App State =====
+  const state = {
+    text: '',
+    viewing: false,
+    viewScrollTop: 0,
+    voiceURI: '',
+    rate: 1, pitch: 1, volume: 1,
+    index: 0, // current chunk index in viewer
+  };
+
+  function showToast(msg){
+    toast.textContent = msg; toast.classList.add('show');
+    setTimeout(()=>toast.classList.remove('show'), 1500);
+  }
+
+  function syncControlsFromState(){
+    rate.value = state.rate; pitch.value = state.pitch; volume.value = state.volume;
+    rateV.value = state.rate; pitchV.value = state.pitch; volumeV.value = state.volume;
+  }
+
+  // ===== Speech Synthesis =====
+  const synth = window.speechSynthesis;
+  let voices = [];
+
+  function loadVoices(){
+    voices = synth.getVoices();
+    function fill(sel){
+      const v = sel.value; sel.innerHTML = '';
+      for(const voice of voices){
+        const opt = document.createElement('option');
+        opt.value = voice.voiceURI; opt.textContent = `${voice.name} (${voice.lang})${voice.default?' — デフォルト':''}`;
+        sel.appendChild(opt);
+      }
+      // Restore selection
+      if(state.voiceURI){ sel.value = state.voiceURI; }
+      if(!sel.value && voices[0]) sel.value = voices[0].voiceURI;
+    }
+    fill(voiceSel); fill(voiceSelV);
+  }
+  loadVoices();
+  if(typeof speechSynthesis !== 'undefined') speechSynthesis.onvoiceschanged = loadVoices;
+
+  function voiceByURI(uri){ return voices.find(v=>v.voiceURI===uri) || voices[0]; }
+
+  // ===== Viewer Rendering =====
+  let chunks = []; // reading units (paragraphs)
+  function toParagraphs(text){
+    // Normalize line breaks and split into paragraphs. Keep blank lines as separators.
+    return text.replace(/\r\n?/g, '\n')
+               .split(/\n{2,}|\n-\s?\n/g)
+               .map(s=>s.trim())
+               .filter(Boolean);
+  }
+  function renderViewer(text){
+    chunks = toParagraphs(text);
+    docEl.innerHTML = '';
+    for(let i=0;i<chunks.length;i++){
+      const p = document.createElement('p');
+      p.dataset.idx = i;
+      p.textContent = chunks[i];
+      if(i===state.index) p.classList.add('active');
+      docEl.appendChild(p);
+    }
+    setTimeout(()=>{
+      document.querySelector(`[data-idx="${state.index}"]`)?.scrollIntoView({block:'center'});
+      document.getElementById('content').scrollTop = state.viewScrollTop || 0;
+    }, 0);
+  }
+
+  // ===== Speak Controller =====
+  let currentUtter = null;
+  function speakIndex(i){
+    if(i<0 || i>=chunks.length) return;
+    state.index = i; saveStateThrottled();
+    document.querySelectorAll('.doc .active').forEach(el=>el.classList.remove('active'));
+    const p = document.querySelector(`[data-idx="${i}"]`);
+    p?.classList.add('active'); p?.scrollIntoView({block:'center'});
+
+    if(currentUtter){ synth.cancel(); currentUtter=null; }
+    const u = new SpeechSynthesisUtterance(chunks[i]);
+    const v = voiceByURI(voiceSelV.value || state.voiceURI);
+    if(v) u.voice = v;
+    u.rate = parseFloat(rateV.value || state.rate);
+    u.pitch = parseFloat(pitchV.value || state.pitch);
+    u.volume = parseFloat(volumeV.value || state.volume);
+    u.onend = ()=>{ currentUtter=null; if(state.index < chunks.length-1){ speakIndex(state.index+1); } };
+    u.onerror = ()=>{ currentUtter=null; };
+    currentUtter = u; synth.speak(u);
+  }
+
+  // ===== Event Wiring =====
+  let saveTimer = null;
+  function saveStateThrottled(){
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(()=>idbSet('app', {...state}), 250);
+  }
+
+  // Editor input
+  editor.addEventListener('input', ()=>{ state.text = editor.value; saveStateThrottled(); });
+
+  // Control changes
+  [rate, pitch, volume].forEach(el=> el.addEventListener('input', ()=>{
+    state.rate = parseFloat(rate.value); state.pitch=parseFloat(pitch.value); state.volume=parseFloat(volume.value);
+    rateV.value = rate.value; pitchV.value=pitch.value; volumeV.value=volume.value; saveStateThrottled();
+  }));
+  [rateV, pitchV, volumeV].forEach(el=> el.addEventListener('input', ()=>{
+    state.rate = parseFloat(rateV.value); state.pitch=parseFloat(pitchV.value); state.volume=parseFloat(volumeV.value);
+    rate.value = rateV.value; pitch.value=pitchV.value; volume.value=volumeV.value; saveStateThrottled();
+  }));
+  [voiceSel, voiceSelV].forEach(sel=> sel.addEventListener('change', ()=>{ state.voiceURI = sel.value; voiceSel.value=sel.value; voiceSelV.value=sel.value; saveStateThrottled(); }));
+
+  // Buttons
+  speakQuick.addEventListener('click', ()=>{
+    const s = editor.value.substring(editor.selectionStart, editor.selectionEnd) || editor.value.slice(0, 300);
+    if(!s.trim()) return; const u = new SpeechSynthesisUtterance(s);
+    const v = voiceByURI(voiceSel.value || state.voiceURI); if(v) u.voice=v;
+    u.rate=state.rate; u.pitch=state.pitch; u.volume=state.volume; synth.speak(u);
+  });
+  saveNow.addEventListener('click', ()=>{ saveStateThrottled(); showToast('保存しました'); });
+  clearAll.addEventListener('click', async ()=>{
+    if(!confirm('全文を消去しますか？')) return; editor.value=''; state.text=''; state.index=0; await idbSet('app', {...state}); showToast('消去しました');
+  });
+
+  // View mode toggle
+  function enterView(){
+    viewer.classList.add('show'); viewer.setAttribute('aria-hidden','false');
+    state.viewing = true; state.viewScrollTop = document.getElementById('content').scrollTop || 0; saveStateThrottled();
+    renderViewer(editor.value);
+  }
+  function leaveView(){
+    viewer.classList.remove('show'); viewer.setAttribute('aria-hidden','true');
+    state.viewing = false; state.viewScrollTop = 0; saveStateThrottled();
+    synth.cancel(); currentUtter=null;
+  }
+  closeView.addEventListener('click', leaveView);
+  viewBtn.addEventListener('click', ()=>{ state.index=0; enterView(); });
+
+  // Playback controls
+  playBtn.addEventListener('click', ()=>{
+    if(!chunks.length) renderViewer(editor.value);
+    speakIndex(state.index || 0);
+  });
+  pauseBtn.addEventListener('click', ()=> synth.pause());
+  resumeBtn.addEventListener('click', ()=> synth.resume());
+  stopBtn.addEventListener('click', ()=> { synth.cancel(); currentUtter=null; });
+  document.getElementById('content').addEventListener('scroll', (e)=>{ state.viewScrollTop = e.target.scrollTop; saveStateThrottled(); });
+
+
+  // Restore state
+  (async function init(){
+    const saved = await idbGet('app');
+    if(saved){ Object.assign(state, saved); }
+    editor.value = state.text || '';
+    syncControlsFromState();
+    // When restored, keep viewing state and scroll
+    if(state.viewing){ renderViewer(state.text || ''); enterView(); }
+  })();
+  </script>
+</body>
+</html>
